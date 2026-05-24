@@ -186,6 +186,8 @@ module Vtysh
       config.each_line do |line|
         line = line.strip
         next if line.empty? || line.start_with?('#', '!')
+        next if line.start_with?('ip route ')  # managed by config_db, not vtysh
+        next if line =~ /^frr (version|defaults)/ || line == 'no service integrated-vtysh-config' || line.start_with?('agentx')
 
         if line =~ /^exit(-address-family|-vrf)?$/
           context_stack.pop unless context_stack.empty?
