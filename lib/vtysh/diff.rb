@@ -160,11 +160,24 @@ module Vtysh
 
     def self.reorder_non_bgp(commands)
       prefix_lists = commands.select { |c| c.include?("ip prefix-list") }
-      route_maps = commands.select { |c| c.include?("route-map") && !c.include?("no ") }
-      removals = commands.select { |c| c.include?("no ") } - prefix_lists
-      rest = commands - prefix_lists - route_maps - removals
+      # Only match route-map block creation (2 -c args), not commands inside route-maps
+      route_maps = commands.select { |c| c.include?("route-map") && !c.include?("no ") && c.scan(/-c "/).count == 2 }
+      top_level_removals = commands.select { |c| c.include?("no ") && c.scan(/-c "/).count <= 2 } - prefix_lists
+      rest = commands - prefix_lists - route_maps - top_level_removals
 
-      (prefix_lists + route_maps + rest + removals).uniq
+      # Within context: group by context path, put removals before additions
+      # so FRR replaces set/match statements correctly (remove old, then add new)
+      rest = rest.group_by { |c|
+        parts = c.scan(/-c "([^"]+)"/).flatten
+        parts[0..-2].join("|")  # context = all but last -c arg
+      }.flat_map { |_ctx, cmds|
+        cmds.sort_by { |c|
+          last_arg = c.scan(/-c "([^"]+)"/).flatten.last
+          last_arg&.start_with?("no ") ? 0 : 1
+        }
+      }
+
+      (prefix_lists + route_maps + rest + top_level_removals).uniq
     end
 
     def self.reorder_bgp(commands)
@@ -187,7 +200,6 @@ module Vtysh
         line = line.strip
         next if line.empty? || line.start_with?('#', '!')
         next if line.start_with?('ip route ')  # managed by config_db, not vtysh
-        next if line.start_with?('hostname ')  # managed by system hostname, FRR auto-inherits
         next if line =~ /^frr (version|defaults)/ || line == 'no service integrated-vtysh-config' || line.start_with?('agentx')
 
         if line =~ /^exit(-address-family|-vrf)?$/
