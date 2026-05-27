@@ -199,7 +199,12 @@ module Vtysh
       config.each_line do |line|
         line = line.strip
         next if line.empty? || line.start_with?('#', '!')
-        next if line.start_with?('ip route ')  # managed by config_db, not vtysh
+        next if line.start_with?('ip route ')       # managed by config_db STATIC_ROUTE
+        next if line.start_with?('hostname ')      # managed by system hostname
+        next if line == 'ip nht resolve-via-default'   # bgpcfgd managed
+        next if line == 'ipv6 nht resolve-via-default' # bgpcfgd managed
+        next if line == 'ip protocol bgp route-map RM_SET_SRC' # bgpcfgd managed
+        next if line =~ /^(no )?set src /                      # bgpcfgd managed (inside RM_SET_SRC)
         next if line =~ /^frr (version|defaults)/ || line == 'no service integrated-vtysh-config' || line.start_with?('agentx')
 
         if line =~ /^exit(-address-family|-vrf)?$/
