@@ -187,7 +187,22 @@ module Vtysh
       removals = commands.select { |c| c.include?("no ") }
       rest = commands - peer_groups - remote_as - listen_range - removals
 
-      (peer_groups + remote_as + listen_range + rest + removals).uniq
+      # A removal whose slot is reclaimed by an addition must run first, or FRR
+      # rejects the addition as overlapping the value it supersedes.
+      slots = (commands - removals).map { |c| slot_key(c) }.compact
+      superseded, other = removals.partition { |c| slots.include?(slot_key(c)) }
+
+      (peer_groups + remote_as + superseded + listen_range + rest + other).uniq
+    end
+
+    # Identifies commands that occupy one logical slot, so the "no" form and the
+    # form replacing it hash alike. Nil when the command owns no exclusive slot.
+    def self.slot_key(command)
+      parts = command.scan(/-c "([^"]+)"/).flatten
+      slot = case parts.last.to_s.sub(/\Ano /, "")
+             when /\Abgp listen range \S+ peer-group (\S+)\z/ then "listen-range:#{$1}"
+             end
+      slot && (parts[0..-2] + [slot]).join("|")
     end
 
     # --- Parsing ---

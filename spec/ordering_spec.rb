@@ -154,4 +154,62 @@ RSpec.describe "Command ordering" do
       expect(route_map_idx).to be < route_map_ref_idx
     end
   end
-end 
+
+  context "when a bgp listen range changes value" do
+    let(:source) do
+      <<~CONFIG
+        router bgp 65001
+         bgp router-id 10.0.0.1
+         neighbor PEERS peer-group
+         neighbor PEERS remote-as 65001
+         bgp listen range 10.10.0.0/16 peer-group PEERS
+        exit
+      CONFIG
+    end
+
+    it "removes the superseded range before adding the new one" do
+      target = source.sub("10.10.0.0/16", "10.10.0.0/12")
+
+      commands = Vtysh::Diff.commands(source, target)
+
+      # Incremental path: the router-id is unchanged, so the block is not recreated
+      expect(commands).to all(satisfy { |cmd| !cmd.include?('-c "no router bgp') })
+
+      removal_idx = commands.find_index { |cmd| cmd.include?("no bgp listen range 10.10.0.0/16") }
+      addition_idx = commands.find_index { |cmd| cmd.include?('-c "bgp listen range 10.10.0.0/12') }
+
+      expect(removal_idx).not_to be_nil
+      expect(addition_idx).not_to be_nil
+
+      # FRR rejects an overlapping range while the old one still exists
+      expect(removal_idx).to be < addition_idx
+    end
+
+    it "keeps unrelated removals last and peer-groups before their ranges" do
+      target = <<~CONFIG
+        router bgp 65001
+         bgp router-id 10.0.0.1
+         neighbor PEERS peer-group
+         neighbor PEERS remote-as 65001
+         neighbor CLIENTS peer-group
+         bgp listen range 10.10.0.0/12 peer-group PEERS
+         bgp listen range 192.168.0.0/16 peer-group CLIENTS
+        exit
+      CONFIG
+      source_with_extra = source.sub(" bgp listen range", " neighbor OLDPG peer-group
+ bgp listen range")
+
+      commands = Vtysh::Diff.commands(source_with_extra, target)
+
+      superseded_idx = commands.find_index { |cmd| cmd.include?("no bgp listen range 10.10.0.0/16") }
+      unrelated_idx = commands.find_index { |cmd| cmd.include?("no neighbor OLDPG peer-group") }
+      clients_pg_idx = commands.find_index { |cmd| cmd.include?('-c "neighbor CLIENTS peer-group') }
+      clients_range_idx = commands.find_index { |cmd| cmd.include?('-c "bgp listen range 192.168.0.0/16') }
+
+      # The range PEERS is reclaiming goes first; OLDPG is not superseded, so it stays last
+      expect(superseded_idx).to be < unrelated_idx
+      expect(unrelated_idx).to eq(commands.length - 1)
+      expect(clients_pg_idx).to be < clients_range_idx
+    end
+  end
+end
